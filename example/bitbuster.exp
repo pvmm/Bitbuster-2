@@ -1,0 +1,2 @@
+bitbuster.depack: EQU 0x0000403F
+bitbuster.depack_block: EQU 0x00004056

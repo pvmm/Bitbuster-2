@@ -1,0 +1,2 @@
+bitbuster_vram.depack: EQU 0x00004060
+bitbuster_vram.depack_block: EQU 0x00004077

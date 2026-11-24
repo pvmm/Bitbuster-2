@@ -23,6 +23,7 @@
 
 #include "decompress.h"
 #include <cstring>
+#include <cstdio>
 
 
 
@@ -131,8 +132,18 @@ int match_position;
 				output_data = tmp;	
 			}
 				
-			while ( match_length-- )
-				output_data[ position++ ] = output_data[ match_position++ ];
+			{
+				int _ml = match_length;
+				int _mp = match_position;
+				int _po = position;
+				while ( match_length-- ) {
+					if (position >= 8200 && position <= 8250)
+						fprintf(stderr,"MATCH pos=%d from=%d val=%02x ml=%d\n", position, match_position, output_data[match_position], _ml);
+					output_data[ position++ ] = output_data[ match_position++ ];
+				}
+				if (_po <= 8250 && position >= 8200)
+					fprintf(stderr,"MATCHBLOCK start=%d len=%d src=%d\n", _po, _ml, _mp);
+			}
 		}
 		else
 		{ 	
@@ -149,6 +160,8 @@ int match_position;
 				output_data = tmp;	
 			}
 			
+			if (position >= 8200 && position <= 8250)
+				fprintf(stderr,"LIT pos=%d bytepos=%d val=%02x\n", position, byte_position, input_data[byte_position]);
 			output_data[ position++ ] = input_data[ byte_position++ ];
 		}	
 	}
