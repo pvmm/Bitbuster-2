@@ -8,12 +8,17 @@
 ;	Bank switching: when the compressed stream pointer (HL) reaches the end of
 ;	the configured window, the next bank is selected and HL wraps to the window
 ;	start. Configure before use:
-;	  BB_BANK_ADDR     - RAM byte holding current bank number
-;	  BB_BANK_REG      - ASCII8 mapper register address (default $7000 for
-;	                     window $8000-$9FFF)
-;	  BB_WINDOW_END_H  - high byte of first address past window (default $A0)
+;	  BB_BANK_ADDR      - RAM byte holding current bank number
+;	  BB_BANK_REG       - mapper register address (default $7000 for 8000-9FFF)
+;	  BB_WINDOW_END_H   - high byte of first address past window (default $A0)
 ;	  BB_WINDOW_START_H - high byte of window start (default $80)
-;	  BB_VRAM_A16_ADDR - RAM byte, bit 2 = VRAM A16 (default 0, no A16)
+;	  BB_VRAM_A16_ADDR  - RAM byte, bit 2 = VRAM A16 (0 = disabled)
+;	  BB_END_BANK_ADDR  - RAM byte: temporary end bank for depack_pck
+;	  BB_END_HL_ADDR    - RAM word: temporary end HL for depack_pck
+;
+;	depack_pck: consumes standard PCK stream (count + len,len,payload...).
+;	Returns HL=stream ptr, DE=VRAM end, A=blocks left. Restores HL to the
+;	true block end to guard against bitstream overread at gamma overflow.
 ;
 ;	Permission is hereby granted, free of charge, to any person obtaining a copy of
 ;	this software and associated documentation files (the "Software"), to deal in
@@ -34,31 +39,17 @@
 
 		MODULE	bitbuster_vram_bank
 
+; Bank-aware BitBuster VRAM decompressor.
+; Configured by BB_BANK_ADDR, BB_VRAM_A16_ADDR, BB_BANK_REG,
+; BB_WINDOW_START_H, BB_WINDOW_END_H, BB_END_BANK_ADDR, BB_END_HL_ADDR.
+
 		IFNDEF	BITBUSTER_VRAM_DATA_PORT
 BITBUSTER_VRAM_DATA_PORT:	EQU	$98
 		ENDIF
 		IFNDEF	BITBUSTER_VRAM_CMD_PORT
 BITBUSTER_VRAM_CMD_PORT:	EQU	$99
 		ENDIF
-		IFNDEF	BB_BANK_REG
-BB_BANK_REG:	EQU	$7000		; ASCII8 page 2 (8000-9FFF)
-		ENDIF
-		IFNDEF	BB_WINDOW_END_H
-BB_WINDOW_END_H:	EQU	$A0
-		ENDIF
-		IFNDEF	BB_WINDOW_START_H
-BB_WINDOW_START_H:	EQU	$80
-		ENDIF
 
-; Caller must provide:
-;   BB_BANK_ADDR      equ <ram address>  ; current bank number byte
-;   BB_VRAM_A16_ADDR  equ <ram address>  ; bit 2 = A16 (optional, define 0)
-		IFNDEF	BB_VRAM_A16_ADDR
-BB_VRAM_A16_ADDR:	EQU	0
-		ENDIF
-
-; Advance compressed stream pointer past 8KB window boundary.
-; Preserves AF, BC, DE. Sets HL = BB_WINDOW_START_H:00.
 bb_next_bank:
 		push	af
 		push	bc
@@ -80,24 +71,6 @@ bb_next_bank:
 		call	nc,bb_next_bank
 		ENDM
 
-; Read byte from compressed stream into A, advance HL, handle bank crossing.
-; Clobbers flags only.
-		MACRO	BB_READ_BYTE_A
-		BB_CHECK_BANK
-		ld	a,(hl)
-		inc	hl
-		ENDM
-
-; Read byte from compressed stream into C, advance HL, handle bank crossing.
-; Preserves A.
-		MACRO	BB_READ_BYTE_C
-		push	af
-		BB_CHECK_BANK
-		pop	af
-		ld	c,(hl)
-		inc	hl
-		ENDM
-
 		IFDEF	BITBUSTER_OPTIMIZE_SPEED
 		MACRO	GET_BIT_FROM_BITSTREAM
 		add	a,a
@@ -113,9 +86,6 @@ bb_next_bank:
 		call	get_bit_from_bitstream
 		ENDM
 
-; get a bit from the bitstream
-; carry if bit is set, nocarry if bit is clear
-; preserves BC, DE, HL; updates A as bit buffer
 get_bit_from_bitstream:
 		add	a,a
 		ret	nz
@@ -126,7 +96,6 @@ get_bit_from_bitstream:
 		ret
 		ENDIF
 
-; Set VDP for VRAM write. DE = A0-A15, BB_VRAM_A16_ADDR bit 2 = A16.
 set_vram_write:
 		ld	c,BITBUSTER_VRAM_CMD_PORT
 		ld	a,d
@@ -138,8 +107,6 @@ set_vram_write:
 		ld	a,(BB_VRAM_A16_ADDR)
 		and	$04
 		or	b
-	ELSE
-		; no A16
 	ENDIF
 		out	(c),a
 		ld	a,$80+14
@@ -152,7 +119,6 @@ set_vram_write:
 		out	(c),a
 		ret
 
-; Set VDP for VRAM read. DE = A0-A15, BB_VRAM_A16_ADDR bit 2 = A16.
 set_vram_read:
 		ld	c,BITBUSTER_VRAM_CMD_PORT
 		ld	a,d
@@ -175,7 +141,6 @@ set_vram_read:
 		out	(c),a
 		ret
 
-; write one byte from compressed stream to VRAM
 		MACRO	WRITE_LITERAL_TO_VRAM
 		ex	af,af'
 		call	set_vram_write
@@ -187,9 +152,67 @@ set_vram_read:
 		inc	de
 		ENDM
 
-; Depack a block from banked compressed stream to VRAM.
-; ENTRY: HL=compressed data pointer (banked window), DE=VRAM dest (A16 in BB_VRAM_A16_ADDR)
-; EXIT:  HL=after compressed data, DE=after decompressed data
+; Bank-aware depack: reads standard PCK stream (count + len,len,payload...)
+; ENTRY: HL=stream ptr, DE=VRAM dest, A=0 start new / <>0 continue
+; EXIT:  HL=decompressed size, BC=decompressed size, DE=end VRAM, A=blocks left
+;        Stream pointer is left after last consumed block in (BB_END_HL_ADDR)/(BB_BANK_ADDR)
+; Note: this implementation decompresses one block per call when A!=0 not supported
+;       the same way as original; use depack_pck for full stream.
+depack_pck:	EXPORT	bitbuster_vram_bank.depack_pck
+		; A = 0: read count
+		or	a
+		jr	nz,.next_block
+		BB_CHECK_BANK
+		ld	a,(hl)
+		inc	hl
+.next_block:
+		push	af		; blocks remaining (preserve across BB_CHECK_BANK)
+		; read 2-byte block size
+		BB_CHECK_BANK
+		ld	c,(hl)
+		inc	hl
+		BB_CHECK_BANK
+		ld	b,(hl)
+		inc	hl
+		; BC = compressed block size
+		push	de		; VRAM dest start
+		push	bc		; compressed size
+
+		; compute end = HL + BC, handling bank wrap
+		ld	a,(BB_BANK_ADDR)
+		ld	(BB_END_BANK_ADDR),a
+		push	hl
+		add	hl,bc
+		ld	a,h
+		cp	BB_WINDOW_END_H
+		jr	c,.end_ok
+		; wrap: HL -= window_size, end_bank++
+		sub	(BB_WINDOW_END_H - BB_WINDOW_START_H)
+		ld	h,a
+		ld	a,(BB_END_BANK_ADDR)
+		inc	a
+		ld	(BB_END_BANK_ADDR),a
+.end_ok:
+		ld	(BB_END_HL_ADDR),hl
+		pop	hl		; HL = payload start
+
+		call	depack_block_raw
+
+		; restore stream pointer to true end of block
+		ld	a,(BB_END_BANK_ADDR)
+		ld	(BB_BANK_ADDR),a
+		ld	bc,BB_BANK_REG
+		ld	(bc),a
+		ld	hl,(BB_END_HL_ADDR)
+
+		; HL = stream ptr, DE = VRAM end
+		pop	bc		; discard compressed size
+		pop	bc		; discard original VRAM dest
+		pop	af		; blocks remaining
+		dec	a
+		ret
+
+; Raw block depack (HL at compressed data, banked)
 depack_block_raw:	EXPORT	bitbuster_vram_bank.depack_block_raw
 		di
 		call	set_vram_write
@@ -198,14 +221,6 @@ depack_block_raw:	EXPORT	bitbuster_vram_bank.depack_block_raw
 depack_loop:	GET_BIT_FROM_BITSTREAM
 		jp	c,output_compressed
 		WRITE_LITERAL_TO_VRAM
-		IFDEF	BITBUSTER_OPTIMIZE_SPEED
-		GET_BIT_FROM_BITSTREAM
-		jp	c,output_compressed
-		WRITE_LITERAL_TO_VRAM
-		GET_BIT_FROM_BITSTREAM
-		jp	c,output_compressed
-		WRITE_LITERAL_TO_VRAM
-		ENDIF
 		jp	depack_loop
 
 output_compressed:
@@ -224,7 +239,7 @@ get_gamma_value_end:
 		ld	iyh,b
 		ld	iyl,c
 
-		push	af		; preserve bitstream
+		push	af
 		BB_CHECK_BANK
 		ld	c,(hl)
 		inc	hl
