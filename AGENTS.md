@@ -55,7 +55,7 @@ Linux portability fixes applied to compressor sources: added `#include <cstring>
 
 - `bitbuster_vram_bank.asm`: bank-aware VRAM decompressor. Reads compressed stream from a mapped window (`BB_BANK_REG`, `BB_WINDOW_START_H`, `BB_WINDOW_END_H`), switches banks via `bb_next_bank` on boundary, and supports 17-bit VRAM through `BB_VRAM_A16_ADDR`.
 - **Critical**: `bb_next_bank` must return with carry set (`scf`) because get_bit reload depends on sentinel carry; BB_CHECK_BANK's `cp` destroys carry.
-- `tools/build_panko_ascii8_rom.py` builds `panko_ascii8.rom` or `panko_ascii16.rom` from `../panko.pc0`, `../panko.pc1`, `../panko.PAL`.
+- `tools/build_panko_ascii8_rom.py` builds `panko_ascii8.rom` or `panko_ascii16.rom` from `example/panko.pc0`, `example/panko.pc1`, `example/panko.PAL`.
 - `--mapper ascii8` (default, 8KB banks, 8000-9FFF window) or `--mapper ascii16` (16KB banks, 8000-BFFF window).
 - Continuous stream layout (option 1): full PCK files concatenated (count+len+payload), packed back-to-back across data banks with no per-block padding; only last data bank has slack.
 - Runtime: set `BB_BANK_ADDR` to first data bank, HL=window start, call `depack_pck` loop for each PCK stream. `depack_pck` fixes HL to true block end (guards against bitstream overread).

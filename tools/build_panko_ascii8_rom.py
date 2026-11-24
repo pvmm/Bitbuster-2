@@ -8,9 +8,9 @@ The depacker switches mapper banks when the source pointer crosses the mapped
 window.
 
 Inputs (defaults relative to this script / repo layout):
-  ../panko.pc0   - even field, BitBuster -b 8192
-  ../panko.pc1   - odd field,  BitBuster -b 8192
-  ../panko.PAL   - optional 7-byte-header + 32-byte V9938 palette
+  panko.pc0   - even field, BitBuster -b 8192
+  panko.pc1   - odd field,  BitBuster -b 8192
+  panko.PAL   - optional 7-byte-header + 32-byte V9938 palette
 """
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PC0 = ROOT.parent / "panko.pc0"
-DEFAULT_PC1 = ROOT.parent / "panko.pc1"
-DEFAULT_PAL = ROOT.parent / "panko.PAL"
+DEFAULT_PC0 = ROOT / "example" / "panko.pc0"
+DEFAULT_PC1 = ROOT / "example" / "panko.pc1"
+DEFAULT_PAL = ROOT / "example" / "panko.PAL"
 DEFAULT_OUT = ROOT / "panko_ascii8.rom"
 SJASMPLUS = Path(os.environ.get("SJASMPLUS", "/home/pedro/bin/sjasmplus"))
 
