@@ -54,8 +54,11 @@ Linux portability fixes applied to compressor sources: added `#include <cstring>
 ## Bank-aware BitBuster / MegaROM (panko)
 
 - `bitbuster_vram_bank.asm`: bank-aware VRAM decompressor. Reads compressed stream from a mapped window (`BB_BANK_REG`, `BB_WINDOW_START_H`, `BB_WINDOW_END_H`), switches banks via `bb_next_bank` on boundary, and supports 17-bit VRAM through `BB_VRAM_A16_ADDR`.
+- `bitbuster_bank.asm`: bank-aware RAM BitBuster decompressor (module `bitbuster_bank`). Same window/bank-boundary/PCK-end fix as `bitbuster_vram_bank.asm`, but writes to RAM (`ldi`/`ldir`) instead of VDP. Caller provides RAM buffer >= block size (`-b 128..32768`). Exports `bitbuster_bank.depack_pck`, `bitbuster_bank.depack_block_raw`, `bitbuster_bank.bb_next_bank`. BB_CHECK_BANK clobbers A; preserve bitstream (ex af,af') around literal BB_CHECK_BANK.
 - **Critical**: `bb_next_bank` must return with carry set (`scf`) because get_bit reload depends on sentinel carry; BB_CHECK_BANK's `cp` destroys carry.
 - `tools/build_panko_ascii8_rom.py` builds `panko_ascii8.rom` or `panko_ascii16.rom` from `example/panko.pc0`, `example/panko.pc1`, `example/panko.PAL`.
+- `tools/build_panko_ascii8_rom_hmmc.py` builds a similar ROM that exemplifies `bitbuster_bank.asm`: decompresses each PCK block to an 8KB RAM buffer, then transfers it to VRAM with V9938 HMMC (R#36-R#46, CMD $F0, data to port $9B). Verified: p0/p1 0 diffs vs `example/panko.w70/w71`.
+- HMMC gotchas: set R#17 with AII=1 (bit 7) for data send so writes to $9B stay on R#44; poll S#2 TR (bit 7) before each outi and wait for CE==0 after sending all bytes; keep DI during command/data transfer; preserve caller registers used for DY/NY updates.
 - `--mapper ascii8` (default, 8KB banks, 8000-9FFF window) or `--mapper ascii16` (16KB banks, 8000-BFFF window).
 - Continuous stream layout (option 1): full PCK files concatenated (count+len+payload), packed back-to-back across data banks with no per-block padding; only last data bank has slack.
 - Runtime: set `BB_BANK_ADDR` to first data bank, HL=window start, call `depack_pck` loop for each PCK stream. `depack_pck` fixes HL to true block end (guards against bitstream overread).
@@ -63,6 +66,7 @@ Linux portability fixes applied to compressor sources: added `#include <cstring>
 ## openmsx testing
 
 - Use `-machine C-BIOS_MSX2+` for SCREEN 7 / V9938 tests. Headless scripts are sensitive to timing; prefer `after realtime` for dumps/screenshots.
+- Let OpenMSX display onscreen for tests; do not use `OPENMSX_LAUNCH_HEADLESS=true` or `SDL_VIDEODRIVER=dummy`.
 - VRAM dump: `after realtime N { save_debuggable VRAM /tmp/opencode/x.bin; exit }`.
 - Screenshots can be flaky in this environment; VRAM dumps are more reliable for automated checks.
 - For VRAM comparisons, read full 131072-byte dump; SCREEN 7 page 1 is at `0x10000`.
